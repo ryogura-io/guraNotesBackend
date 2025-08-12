@@ -58,22 +58,34 @@ function auth(req, res, next) {
 app.post("/api/register", async (req, res) => {
   const { email, password } = req.body;
   if (!email || !password) return res.status(400).json({ error: "Email and password required" });
+
   const exists = await User.findOne({ email });
   if (exists) return res.status(400).json({ error: "User already exists" });
+
   const passwordHash = await bcrypt.hash(password, 10);
   const newUser = await User.create({ email, passwordHash });
-  res.json({ success: true, id: newUser._id });
+
+  // Create token for immediate login
+  const token = jwt.sign({ type: "user", id: newUser._id }, JWT_SECRET, { expiresIn: "7d" });
+
+  res.json({ success: true, token });
 });
 
 // --- CREATE DRAWER ---
 app.post("/api/drawers/create", async (req, res) => {
   const { drawerName, password } = req.body;
   if (!drawerName || !password) return res.status(400).json({ error: "Drawer name and password required" });
+
   const exists = await Drawer.findOne({ drawerName });
   if (exists) return res.status(400).json({ error: "Drawer already exists" });
+
   const passwordHash = await bcrypt.hash(password, 10);
   const newDrawer = await Drawer.create({ drawerName, passwordHash });
-  res.json({ success: true, id: newDrawer._id });
+
+  // Create token for immediate access
+  const token = jwt.sign({ type: "drawer", id: newDrawer._id }, JWT_SECRET, { expiresIn: "7d" });
+
+  res.json({ success: true, token });
 });
 
 // --- LOGIN USER ---
@@ -81,9 +93,11 @@ app.post("/api/login", async (req, res) => {
   const { email, password } = req.body;
   const u = await User.findOne({ email });
   if (!u) return res.status(400).json({ error: "User not found" });
+
   const match = await bcrypt.compare(password, u.passwordHash);
   if (!match) return res.status(400).json({ error: "Wrong password" });
-  const token = jwt.sign({ type: "user", id: u._id }, JWT_SECRET);
+
+  const token = jwt.sign({ type: "user", id: u._id }, JWT_SECRET, { expiresIn: "7d" });
   res.json({ token });
 });
 
@@ -92,9 +106,11 @@ app.post("/api/drawers/login", async (req, res) => {
   const { drawerName, password } = req.body;
   const d = await Drawer.findOne({ drawerName });
   if (!d) return res.status(400).json({ error: "Drawer not found" });
+
   const match = await bcrypt.compare(password, d.passwordHash);
   if (!match) return res.status(400).json({ error: "Wrong password" });
-  const token = jwt.sign({ type: "drawer", id: d._id }, JWT_SECRET);
+
+  const token = jwt.sign({ type: "drawer", id: d._id }, JWT_SECRET, { expiresIn: "7d" });
   res.json({ token });
 });
 
