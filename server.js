@@ -1,209 +1,124 @@
-require('dotenv').config();
-const express = require('express');
-const mongoose = require('mongoose');
-const bcrypt = require('bcrypt');
-const jwt = require('jsonwebtoken');
-const cors = require('cors');
+import express from "express";
+import mongoose from "mongoose";
+import cors from "cors";
+import dotenv from "dotenv";
+import bcrypt from "bcrypt";
+import jwt from "jsonwebtoken";
 
+dotenv.config();
 const app = express();
-app.use(cors()); // adjust origin in production
+app.use(cors());
 app.use(express.json());
 
-const PORT = process.env.PORT || 4000;
-const JWT_SECRET = process.env.JWT_SECRET || 'change_this_in_prod';
-const SALT_ROUNDS = 10;
+const JWT_SECRET = process.env.JWT_SECRET || "dev_secret";
+const PORT = process.env.PORT || 3000;
 
-/* ---------- Mongoose models ---------- */
-const userSchema = new mongoose.Schema({
-  username: { type: String, required: false },
-  email: { type: String, required: true, unique: true },
-  passwordHash: { type: String, required: true },
-}, { timestamps: true });
+// DB connect
+mongoose.connect(process.env.MONGO_URI, { useNewUrlParser: true, useUnifiedTopology: true });
 
-const drawerSchema = new mongoose.Schema({
-  drawerName: { type: String, required: true, unique: true },
-  passwordHash: { type: String, required: true },
-}, { timestamps: true });
-
+// Schemas
+const userSchema = new mongoose.Schema({ email: String, passwordHash: String });
+const drawerSchema = new mongoose.Schema({ drawerName: String, passwordHash: String });
 const noteSchema = new mongoose.Schema({
-  ownerType: { type: String, enum: ['user', 'drawer'], required: true }, // 'user' or 'drawer'
-  ownerId: { type: mongoose.Schema.Types.ObjectId, required: true },      // user._id or drawer._id
+  ownerType: String, // "user" or "drawer"
+  ownerId: mongoose.Schema.Types.ObjectId,
   title: String,
   content: String,
-  createdAt: { type: Date, default: Date.now },
-  updatedAt: Date
+  createdAt: { type: String, default: () => new Date().toISOString() }
 });
 
-const User = mongoose.model('User', userSchema);
-const Drawer = mongoose.model('Drawer', drawerSchema);
-const Note = mongoose.model('Note', noteSchema);
+const User = mongoose.model("User", userSchema);
+const Drawer = mongoose.model("Drawer", drawerSchema);
+const Note = mongoose.model("Note", noteSchema);
 
-/* ---------- DB connect ---------- */
-mongoose.connect(process.env.MONGO_URI, { useNewUrlParser: true, useUnifiedTopology: true })
-.then(() => console.log('MongoDB connected'))
-.catch(err => {
-  console.error('MongoDB connection error:', err);
-  process.exit(1);
-});
-
-/* ---------- Helpers ---------- */
-function signToken(payload) {
-  return jwt.sign(payload, JWT_SECRET, { expiresIn: '7d' });
-}
-
-function authMiddleware(req, res, next) {
-  // Accept token from Authorization: Bearer <token>
-  const header = req.headers.authorization;
-  if (!header) return res.status(401).json({ error: 'No auth token' });
-  const token = header.split(' ')[1];
+// Middleware for authentication
+function auth(req, res, next) {
+  const token = req.headers.authorization?.split(" ")[1];
+  if (!token) return res.status(401).json({ error: "No token" });
   try {
-    const payload = jwt.verify(token, JWT_SECRET);
-    req.user = payload;
+    req.user = jwt.verify(token, JWT_SECRET);
     next();
-  } catch (err) {
-    return res.status(401).json({ error: 'Invalid token' });
+  } catch {
+    res.status(401).json({ error: "Invalid token" });
   }
 }
 
-/* ---------- Auth & drawer routes ---------- */
-
-// Register user
-app.post('/api/register', async (req, res) => {
-  const { email, username, password } = req.body;
-  if (!email || !password) return res.status(400).json({ error: 'email and password required' });
-  try {
-    const existing = await User.findOne({ email });
-    if (existing) return res.status(400).json({ error: 'Email already in use' });
-
-    const passwordHash = await bcrypt.hash(password, SALT_ROUNDS);
-    const user = new User({ email, username, passwordHash });
-    await user.save();
-    const token = signToken({ id: user._id, type: 'user' });
-    res.json({ token, user: { id: user._id, email: user.email, username: user.username } });
-  } catch (err) {
-    res.status(500).json({ error: 'server error' });
-  }
-});
-
-// Login user
-app.post('/api/login', async (req, res) => {
+// --- REGISTER USER ---
+app.post("/api/register", async (req, res) => {
   const { email, password } = req.body;
-  if (!email || !password) return res.status(400).json({ error: 'email and password required' });
-  try {
-    const user = await User.findOne({ email });
-    if (!user) return res.status(400).json({ error: 'Invalid credentials' });
-    const ok = await bcrypt.compare(password, user.passwordHash);
-    if (!ok) return res.status(400).json({ error: 'Invalid credentials' });
-    const token = signToken({ id: user._id, type: 'user' });
-    res.json({ token, user: { id: user._id, email: user.email, username: user.username } });
-  } catch (err) {
-    res.status(500).json({ error: 'server error' });
-  }
+  if (!email || !password) return res.status(400).json({ error: "Email and password required" });
+  const exists = await User.findOne({ email });
+  if (exists) return res.status(400).json({ error: "User already exists" });
+  const passwordHash = await bcrypt.hash(password, 10);
+  const newUser = await User.create({ email, passwordHash });
+  res.json({ success: true, id: newUser._id });
 });
 
-// Create drawer
-app.post('/api/drawers', async (req, res) => {
+// --- CREATE DRAWER ---
+app.post("/api/drawers/create", async (req, res) => {
   const { drawerName, password } = req.body;
-  if (!drawerName || !password) return res.status(400).json({ error: 'drawerName and password required' });
-  try {
-    const existing = await Drawer.findOne({ drawerName });
-    if (existing) return res.status(400).json({ error: 'Drawer name taken' });
-    const passwordHash = await bcrypt.hash(password, SALT_ROUNDS);
-    const drawer = new Drawer({ drawerName, passwordHash });
-    await drawer.save();
-    const token = signToken({ id: drawer._id, type: 'drawer' });
-    res.json({ token, drawer: { id: drawer._id, drawerName: drawer.drawerName } });
-  } catch (err) {
-    res.status(500).json({ error: 'server error' });
-  }
+  if (!drawerName || !password) return res.status(400).json({ error: "Drawer name and password required" });
+  const exists = await Drawer.findOne({ drawerName });
+  if (exists) return res.status(400).json({ error: "Drawer already exists" });
+  const passwordHash = await bcrypt.hash(password, 10);
+  const newDrawer = await Drawer.create({ drawerName, passwordHash });
+  res.json({ success: true, id: newDrawer._id });
 });
 
-// Login drawer
-app.post('/api/drawers/login', async (req, res) => {
+// --- LOGIN USER ---
+app.post("/api/login", async (req, res) => {
+  const { email, password } = req.body;
+  const u = await User.findOne({ email });
+  if (!u) return res.status(400).json({ error: "User not found" });
+  const match = await bcrypt.compare(password, u.passwordHash);
+  if (!match) return res.status(400).json({ error: "Wrong password" });
+  const token = jwt.sign({ type: "user", id: u._id }, JWT_SECRET);
+  res.json({ token });
+});
+
+// --- LOGIN DRAWER ---
+app.post("/api/drawers/login", async (req, res) => {
   const { drawerName, password } = req.body;
-  if (!drawerName || !password) return res.status(400).json({ error: 'drawerName and password required' });
-  try {
-    const drawer = await Drawer.findOne({ drawerName });
-    if (!drawer) return res.status(400).json({ error: 'Invalid credentials' });
-    const ok = await bcrypt.compare(password, drawer.passwordHash);
-    if (!ok) return res.status(400).json({ error: 'Invalid credentials' });
-    const token = signToken({ id: drawer._id, type: 'drawer' });
-    res.json({ token, drawer: { id: drawer._id, drawerName: drawer.drawerName } });
-  } catch (err) {
-    res.status(500).json({ error: 'server error' });
-  }
+  const d = await Drawer.findOne({ drawerName });
+  if (!d) return res.status(400).json({ error: "Drawer not found" });
+  const match = await bcrypt.compare(password, d.passwordHash);
+  if (!match) return res.status(400).json({ error: "Wrong password" });
+  const token = jwt.sign({ type: "drawer", id: d._id }, JWT_SECRET);
+  res.json({ token });
 });
 
-/* ---------- Notes CRUD ---------- */
-/*
-  Authorization:
-  - If JWT payload has type === 'user', then ownerType='user' and ownerId = user id.
-  - If JWT payload has type === 'drawer', then ownerType='drawer' and ownerId = drawer id.
-*/
-
-// fetch notes for current auth
-app.get('/api/notes', authMiddleware, async (req, res) => {
-  const { id, type } = req.user;
-  try {
-    const notes = await Note.find({ ownerType: type, ownerId: id }).sort({ createdAt: -1 });
-    res.json(notes);
-  } catch (err) {
-    res.status(500).json({ error: 'server error' });
-  }
+// --- GET NOTES ---
+app.get("/api/notes", auth, async (req, res) => {
+  const notes = await Note.find({ ownerType: req.user.type, ownerId: req.user.id });
+  res.json(notes);
 });
 
-// create note
-app.post('/api/notes', authMiddleware, async (req, res) => {
-  const { id, type } = req.user;
-  const { title = '', content = '' } = req.body;
-  try {
-    const note = new Note({ ownerType: type, ownerId: id, title, content, createdAt: new Date() });
-    await note.save();
-    res.json(note);
-  } catch (err) {
-    res.status(500).json({ error: 'server error' });
-  }
+// --- CREATE NOTE ---
+app.post("/api/notes", auth, async (req, res) => {
+  const n = await Note.create({
+    ownerType: req.user.type,
+    ownerId: req.user.id,
+    title: req.body.title || "",
+    content: req.body.content || ""
+  });
+  res.json(n);
 });
 
-// update note
-app.put('/api/notes/:id', authMiddleware, async (req, res) => {
-  const { id: authId, type } = req.user;
-  const noteId = req.params.id;
-  const { title, content } = req.body;
-  try {
-    const note = await Note.findById(noteId);
-    if (!note) return res.status(404).json({ error: 'not found' });
-    if (String(note.ownerId) !== String(authId) || note.ownerType !== type) {
-      return res.status(403).json({ error: 'forbidden' });
-    }
-    note.title = title;
-    note.content = content;
-    note.updatedAt = new Date();
-    await note.save();
-    res.json(note);
-  } catch (err) {
-    res.status(500).json({ error: 'server error' });
-  }
+// --- UPDATE NOTE ---
+app.put("/api/notes/:id", auth, async (req, res) => {
+  const n = await Note.findOneAndUpdate(
+    { _id: req.params.id, ownerId: req.user.id },
+    { title: req.body.title, content: req.body.content },
+    { new: true }
+  );
+  res.json(n);
 });
 
-// delete note
-app.delete('/api/notes/:id', authMiddleware, async (req, res) => {
-  const { id: authId, type } = req.user;
-  const noteId = req.params.id;
-  try {
-    const note = await Note.findById(noteId);
-    if (!note) return res.status(404).json({ error: 'not found' });
-    if (String(note.ownerId) !== String(authId) || note.ownerType !== type) {
-      return res.status(403).json({ error: 'forbidden' });
-    }
-    await Note.deleteOne({ _id: noteId });
-    res.json({ success: true });
-  } catch (err) {
-    res.status(500).json({ error: 'server error' });
-  }
+// --- DELETE NOTE ---
+app.delete("/api/notes/:id", auth, async (req, res) => {
+  await Note.deleteOne({ _id: req.params.id, ownerId: req.user.id });
+  res.json({ success: true });
 });
 
-/* ---------- Start server ---------- */
-app.listen(PORT, () => {
-  console.log('Server started on port', PORT);
-});
+// Start server
+app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
